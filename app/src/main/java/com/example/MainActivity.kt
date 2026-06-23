@@ -515,6 +515,131 @@ fun MainDashboardScreen(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
+                // AI Decompiler Settings Card
+                val isAiReconstruction by viewModel.isAiReconstructionEnabled.collectAsStateWithLifecycle()
+                val isProjectExport by viewModel.isProjectExportEnabled.collectAsStateWithLifecycle()
+                val isKeyAvailable = remember { com.example.extractor.GeminiDecompiler.isKeyAvailable() }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(GlassCard, RoundedCornerShape(18.dp))
+                        .border(1.dp, GlassBorder, RoundedCornerShape(18.dp))
+                        .padding(16.dp)
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Decompiler config",
+                                tint = NeonBlue,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "DECOMPILER CONFIGURATION",
+                                color = WhitePure,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
+
+                        // Project Export toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "Android Studio Project Export",
+                                    color = WhitePure,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Generates build.gradle, settings, and wrapper directory structure",
+                                    color = GreyOff,
+                                    fontSize = 10.sp,
+                                    lineHeight = 14.sp
+                                )
+                            }
+                            Switch(
+                                checked = isProjectExport,
+                                onCheckedChange = { viewModel.setProjectExport(it) },
+                                modifier = Modifier.testTag("project_export_toggle"),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = BlackPure,
+                                    checkedTrackColor = NeonBlue,
+                                    uncheckedThumbColor = GreyOff,
+                                    uncheckedTrackColor = GlassBg
+                                )
+                            )
+                        }
+
+                        HorizontalDivider(color = GlassBorder)
+
+                        // AI Reconstruction toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "AI Deep Sources Reconstruction",
+                                    color = WhitePure,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Rebuilds actual method bodies, class interfaces, and variable logic",
+                                    color = GreyOff,
+                                    fontSize = 10.sp,
+                                    lineHeight = 14.sp
+                                )
+                            }
+                            Switch(
+                                checked = isAiReconstruction,
+                                onCheckedChange = { viewModel.setAiReconstruction(it) },
+                                modifier = Modifier.testTag("ai_reconstruction_toggle"),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = BlackPure,
+                                    checkedTrackColor = NeonBlue,
+                                    uncheckedThumbColor = GreyOff,
+                                    uncheckedTrackColor = GlassBg
+                                )
+                            )
+                        }
+
+                        if (!isKeyAvailable && isAiReconstruction) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0x22FF5353), RoundedCornerShape(8.dp))
+                                    .padding(8.dp)
+                            ) {
+                                Text(
+                                    text = "⚠️ Configure GEMINI_API_KEY inside AI Studio Secrets to run AI AST method reconstruction.",
+                                    color = Color(0xFFFF7E7E),
+                                    fontSize = 9.sp,
+                                    lineHeight = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
                 // History label and utilities
                 Row(
                     modifier = Modifier.fillMaxWidth(),

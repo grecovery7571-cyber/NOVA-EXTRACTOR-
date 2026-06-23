@@ -62,6 +62,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isFirstRun = MutableStateFlow(sharedPrefs.getBoolean("first_run", true))
     val isFirstRun: StateFlow<Boolean> = _isFirstRun.asStateFlow()
 
+    private val _isAiReconstructionEnabled = MutableStateFlow(sharedPrefs.getBoolean("ai_reconstruction", true))
+    val isAiReconstructionEnabled: StateFlow<Boolean> = _isAiReconstructionEnabled.asStateFlow()
+
+    private val _isProjectExportEnabled = MutableStateFlow(sharedPrefs.getBoolean("project_export", true))
+    val isProjectExportEnabled: StateFlow<Boolean> = _isProjectExportEnabled.asStateFlow()
+
+    fun setAiReconstruction(enabled: Boolean) {
+        sharedPrefs.edit().putBoolean("ai_reconstruction", enabled).apply()
+        _isAiReconstructionEnabled.value = enabled
+    }
+
+    fun setProjectExport(enabled: Boolean) {
+        sharedPrefs.edit().putBoolean("project_export", enabled).apply()
+        _isProjectExportEnabled.value = enabled
+    }
+
     enum class ViewState {
         SPLASH,
         MAIN,
@@ -112,12 +128,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             withContext(Dispatchers.IO) {
                 try {
-                    val result = SourceExtractor.extract(context, uri, customFileName, object : SourceExtractor.ProgressListener {
-                        override fun onProgress(percentage: Int, step: String) {
-                            _progressPercentage.value = percentage
-                            _progressStep.value = step
+                    val result = SourceExtractor.extract(
+                        context = context,
+                        uri = uri,
+                        customFileName = customFileName,
+                        isAiReconstructionEnabled = _isAiReconstructionEnabled.value,
+                        isProjectExportEnabled = _isProjectExportEnabled.value,
+                        listener = object : SourceExtractor.ProgressListener {
+                            override fun onProgress(percentage: Int, step: String) {
+                                _progressPercentage.value = percentage
+                                _progressStep.value = step
+                            }
                         }
-                    })
+                    )
 
                     // Persist entry to database
                     val entity = HistoryEntity(
