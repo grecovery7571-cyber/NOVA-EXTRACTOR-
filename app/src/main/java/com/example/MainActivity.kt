@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.compose.ui.graphics.asImageBitmap
 import com.example.ui.InstalledApp
+import com.example.ui.TreeNode
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -19,6 +20,7 @@ import androidx.activity.viewModels
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -634,6 +636,31 @@ fun MainDashboardScreen(
                                     fontWeight = FontWeight.Medium
                                 )
                             }
+                        } else if (isKeyAvailable && isAiReconstruction) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0x114CAF50), RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color(0x334CAF50), RoundedCornerShape(8.dp))
+                                    .padding(8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(Color(0xFF4CAF50), CircleShape)
+                                    )
+                                    Text(
+                                        text = "Gemini AI Engine Active (gemini-3.1-pro-preview)",
+                                        color = Color(0xFF81C784),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -708,7 +735,8 @@ fun MainDashboardScreen(
                             HistoryRowCard(
                                 record = record,
                                 onShare = { viewModel.shareOutputZip(context, record.outputPath) },
-                                onDelete = { viewModel.deleteHistoryItem(record.id) }
+                                onDelete = { viewModel.deleteHistoryItem(record.id) },
+                                onBrowse = { viewModel.openDecompiledSourceViewer(record) }
                             )
                         }
                     }
@@ -849,6 +877,20 @@ fun MainDashboardScreen(
                     onClose = { showAppsModal = false }
                 )
             }
+
+            // Decompiled source browser Overlay
+            val activeBrowsingRecord by viewModel.activeBrowsingRecord.collectAsStateWithLifecycle()
+            
+            AnimatedVisibility(
+                visible = activeBrowsingRecord != null,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+            ) {
+                DecompiledSourceBrowserModal(
+                    viewModel = viewModel,
+                    onClose = { viewModel.closeDecompiledSourceViewer() }
+                )
+            }
         }
     }
 }
@@ -860,7 +902,8 @@ fun MainDashboardScreen(
 fun HistoryRowCard(
     record: HistoryEntity,
     onShare: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onBrowse: () -> Unit
 ) {
     val dateString = remember(record.timestamp) {
         try {
@@ -975,6 +1018,18 @@ fun HistoryRowCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (record.status == "SUCCESS") {
+                    IconButton(
+                        onClick = onBrowse,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("browse_history_item_" + record.id)
+                    ) {
+                        FolderIcon(
+                            isExpanded = true,
+                            tint = NeonBlue,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                     IconButton(
                         onClick = onShare,
                         modifier = Modifier
@@ -1785,6 +1840,682 @@ fun ExtractionConfirmationDialog(
             }
         }
     )
+}
+
+/**
+ * 10. INTERACTIVE EXPLORER FILE TREE AND CODE DECOMPILATION VIEW MODAL
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DecompiledSourceBrowserModal(
+    viewModel: MainViewModel,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    val rootNode by viewModel.activeTreeRoot.collectAsStateWithLifecycle()
+    val currentFileContent by viewModel.currentOpenedFileContent.collectAsStateWithLifecycle()
+    val currentFileName by viewModel.currentOpenedFileName.collectAsStateWithLifecycle()
+    val currentFilePath by viewModel.currentOpenedFilePath.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.treeSearchQuery.collectAsStateWithLifecycle()
+    val activeRecord by viewModel.activeBrowsingRecord.collectAsStateWithLifecycle()
+
+    val expandedPaths = remember { mutableStateMapOf<String, Boolean>() }
+
+    // Flat representation computed dynamically based on expansion map and search query
+    val flattenedNodes = remember(rootNode, expandedPaths, searchQuery) {
+        val list = mutableListOf<Pair<TreeNode, Int>>()
+        rootNode?.let { root ->
+            flattenFilteredTree(root, 0, searchQuery, expandedPaths, list)
+        }
+        list
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF090D1A)) // Deep space slate theme
+            .windowInsetsPadding(WindowInsets.systemBars)
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            
+            // Header panel (Premium gloss neon bar)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0F172A))
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .drawBehind {
+                        drawLine(
+                            color = NeonBlue.copy(alpha = 0.2f),
+                            start = Offset(0f, size.height),
+                            end = Offset(size.width, size.height),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    FolderIcon(
+                        isExpanded = true,
+                        tint = NeonBlue,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Column {
+                        Text(
+                            text = activeRecord?.fileName ?: "DECOMPILED SOURCE TREE",
+                            color = WhitePure,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${flattenedNodes.size} visible source parts",
+                            color = GreyOff,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(WhitePure.copy(alpha = 0.05f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close Project Browser",
+                        tint = WhitePure
+                    )
+                }
+            }
+
+            if (rootNode == null) {
+                // Loading view spinner while indexing files
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = NeonBlue, modifier = Modifier.size(36.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "INDEXING DECOMPILED FILE TREE STRUCTURES...",
+                            color = GreyOff,
+                            fontSize = 11.sp,
+                            letterSpacing = 1.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            } else {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f)
+                ) {
+                    val isWideScreen = maxWidth > 680.dp
+
+                    if (isWideScreen) {
+                        // Split view (Explorer on Left, Code Viewer on Right)
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            // File Explorer pane
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .background(Color(0xFF0F172A).copy(alpha = 0.4f))
+                                    .drawBehind {
+                                        drawLine(
+                                            color = GlassBorder,
+                                            start = Offset(size.width, 0f),
+                                            end = Offset(size.width, size.height),
+                                            strokeWidth = 1.dp.toPx()
+                                        )
+                                    }
+                            ) {
+                                ExplorerPanel(
+                                    searchQuery = searchQuery,
+                                    onUpdateQuery = { viewModel.updateTreeSearchQuery(it) },
+                                    flattenedNodes = flattenedNodes,
+                                    expandedPaths = expandedPaths,
+                                    onNodeClick = { node ->
+                                        if (node.isDirectory) {
+                                            expandedPaths[node.path] = !(expandedPaths[node.path] ?: false)
+                                        } else {
+                                            viewModel.loadFileContentFromActiveZip(node.path)
+                                        }
+                                    },
+                                    activeFilePath = currentFilePath ?: ""
+                                )
+                            }
+
+                            // Code visualizer pane
+                            Box(
+                                modifier = Modifier
+                                    .weight(2f)
+                                    .fillMaxHeight()
+                            ) {
+                                if (currentFileContent == null) {
+                                    EmptyCodePlaceholder()
+                                } else {
+                                    CodeViewerPanel(
+                                        fileName = currentFileName ?: "",
+                                        filePath = currentFilePath ?: "",
+                                        fileContent = currentFileContent ?: "",
+                                        onCloseFile = { viewModel.closeDecompiledSourceViewer() },
+                                        context = context,
+                                        isSplit = true
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // Mobile View (Toggle between file list or code content)
+                        if (currentFileContent == null) {
+                            ExplorerPanel(
+                                searchQuery = searchQuery,
+                                onUpdateQuery = { viewModel.updateTreeSearchQuery(it) },
+                                flattenedNodes = flattenedNodes,
+                                expandedPaths = expandedPaths,
+                                onNodeClick = { node ->
+                                    if (node.isDirectory) {
+                                        expandedPaths[node.path] = !(expandedPaths[node.path] ?: false)
+                                    } else {
+                                        viewModel.loadFileContentFromActiveZip(node.path)
+                                    }
+                                },
+                                activeFilePath = ""
+                            )
+                        } else {
+                            CodeViewerPanel(
+                                fileName = currentFileName ?: "",
+                                filePath = currentFilePath ?: "",
+                                fileContent = currentFileContent ?: "",
+                                onCloseFile = { viewModel.closeDecompiledSourceViewer() },
+                                context = context,
+                                isSplit = false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Explorer Panel List & Search view
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExplorerPanel(
+    searchQuery: String,
+    onUpdateQuery: (String) -> Unit,
+    flattenedNodes: List<Pair<TreeNode, Int>>,
+    expandedPaths: Map<String, Boolean>,
+    onNodeClick: (TreeNode) -> Unit,
+    activeFilePath: String
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Search filter input
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = onUpdateQuery,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                placeholder = {
+                    Text(
+                        text = "Search decompiled sources...",
+                        color = GreyOff.copy(alpha = 0.5f),
+                        fontSize = 12.sp
+                    )
+                },
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = WhitePure, fontSize = 13.sp),
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search icon",
+                        tint = GreyOff,
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { onUpdateQuery("") }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                tint = GreyOff,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = NeonBlue.copy(alpha = 0.6f),
+                    unfocusedBorderColor = GlassBorder,
+                    focusedContainerColor = Color(0xFF0F172A),
+                    unfocusedContainerColor = Color(0xFF0F172A).copy(alpha = 0.5f)
+                )
+            )
+        }
+
+        if (flattenedNodes.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (searchQuery.isNotEmpty()) "No matching files or packages found" else "Empty project structure",
+                    color = GreyOff,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                items(flattenedNodes) { (node, depth) ->
+                    val isExpanded = expandedPaths[node.path] ?: false
+                    val isActiveFile = activeFilePath == node.path
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                when {
+                                    isActiveFile -> NeonBlue.copy(alpha = 0.15f)
+                                    node.isDirectory -> Color.Transparent
+                                    else -> Color.Transparent
+                                }
+                            )
+                            .clickable { onNodeClick(node) }
+                            .padding(vertical = 8.dp, horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Custom spacing based on indentation tree depth
+                        Spacer(modifier = Modifier.width((depth * 14).dp))
+
+                        // Tree element icon
+                        val iconColor = when {
+                            node.isDirectory -> if (isExpanded) NeonBlue else GreyOff
+                            node.name == "AndroidManifest.xml" -> Color(0xFFFFB020) // warm amber
+                            node.name.endsWith(".xml") -> Color(0xFFFFD54F) // resource yellow
+                            node.name.endsWith(".smali") -> Color(0xFF29B6F6) // assembly blue
+                            node.name.endsWith(".java") || node.name.endsWith(".kt") -> Color(0xFF4CAF50) // code green
+                            else -> GreyOff
+                        }
+
+                        if (node.isDirectory) {
+                            FolderIcon(
+                                isExpanded = isExpanded,
+                                tint = if (isActiveFile) NeonBlue else iconColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        } else {
+                            FileIcon(
+                                tint = if (isActiveFile) NeonBlue else iconColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Text(
+                            text = node.name,
+                            color = if (isActiveFile) NeonBlue else if (node.isDirectory) WhitePure else WhitePure.copy(alpha = 0.85f),
+                            fontSize = 13.sp,
+                            fontWeight = if (node.isDirectory) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Code viewer panel with vertical and horizontal scroll options & line indices
+ */
+@Composable
+fun CodeViewerPanel(
+    fileName: String,
+    filePath: String,
+    fileContent: String,
+    onCloseFile: () -> Unit,
+    context: Context,
+    isSplit: Boolean
+) {
+    val lines = remember(fileContent) { fileContent.split("\n") }
+    val clipboardManager = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // File view sub-header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0F172A))
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .drawBehind {
+                    drawLine(
+                        color = GlassBorder,
+                        start = Offset(0f, size.height),
+                        end = Offset(size.width, size.height),
+                        strokeWidth = 1.dp.toPx()
+                    )
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                if (!isSplit) {
+                    IconButton(
+                        onClick = onCloseFile,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(WhitePure.copy(alpha = 0.05f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Return to File Tree explorer",
+                            tint = WhitePure
+                        )
+                    }
+                }
+                
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = fileName,
+                        color = WhitePure,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = filePath,
+                        color = GreyOff,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            // Code Operations
+            IconButton(
+                onClick = {
+                    try {
+                        val clip = android.content.ClipData.newPlainText("Source Code", fileContent)
+                        clipboardManager.setPrimaryClip(clip)
+                        android.widget.Toast.makeText(context, "Code copied successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(context, "Copy failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(WhitePure.copy(alpha = 0.05f), CircleShape)
+            ) {
+                CopyIcon(
+                    tint = NeonBlue,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        // Monospace Scrollable code text pane
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f)
+                .background(Color(0xFF070A11)) // Dark IDE back canvas
+        ) {
+            // Horizontal + Vertical Scrollbars
+            val stateVertical = rememberScrollState()
+            val stateHorizontal = rememberScrollState()
+
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(stateVertical)
+            ) {
+                // Line counts gutter
+                Column(
+                    modifier = Modifier
+                        .background(Color(0xFF0A0F1D))
+                        .padding(horizontal = 8.dp, vertical = 12.dp)
+                        .widthIn(min = 36.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    for (i in 1..lines.size) {
+                        Text(
+                            text = i.toString(),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = GreyOff.copy(alpha = 0.4f),
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+
+                // Divider line
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(GlassBorder)
+                )
+
+                // Editable layout contents
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .horizontalScroll(stateHorizontal)
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = fileContent,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = WhitePure.copy(alpha = 0.9f),
+                            lineHeight = 16.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Empty Code Placeholder View
+ */
+@Composable
+fun EmptyCodePlaceholder() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF070B14)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(24.dp)
+        ) {
+            FileIcon(
+                tint = GreyOff.copy(alpha = 0.3f),
+                modifier = Modifier.size(64.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "NO ACTIVE FILE SELECTED",
+                color = WhitePure,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Select any smali, java, or xml resources from the file explorer pane to browse extracted and AI-reconstructed methods.",
+                color = GreyOff,
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center,
+                lineHeight = 16.sp,
+                modifier = Modifier.widthIn(max = 300.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Recursive check helper function specifically to auto-expand directories on query match and render children
+ */
+fun flattenFilteredTree(
+    node: TreeNode,
+    depth: Int,
+    query: String,
+    expandedPaths: Map<String, Boolean>,
+    result: MutableList<Pair<TreeNode, Int>>
+) {
+    for (child in node.children) {
+        val matchesQuery = query.isEmpty() || child.name.contains(query, ignoreCase = true) || hasMatchingChild(child, query)
+        if (matchesQuery) {
+            result.add(Pair(child, depth))
+            val isExpanded = if (query.isNotEmpty()) {
+                hasMatchingChild(child, query)
+            } else {
+                expandedPaths[child.path] ?: false
+            }
+            if (child.isDirectory && isExpanded) {
+                flattenFilteredTree(child, depth + 1, query, expandedPaths, result)
+            }
+        }
+    }
+}
+
+fun hasMatchingChild(node: TreeNode, query: String): Boolean {
+    for (child in node.children) {
+        if (child.name.contains(query, ignoreCase = true) || hasMatchingChild(child, query)) {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * CUSTOM CANVAS DIRECT VECTOR GRAPHICS DRAWABLES
+ */
+@Composable
+fun FolderIcon(isExpanded: Boolean, tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val path = androidx.compose.ui.graphics.Path().apply {
+            if (isExpanded) {
+                // Open folder state
+                moveTo(w * 0.05f, h * 0.25f)
+                lineTo(w * 0.35f, h * 0.25f)
+                lineTo(w * 0.45f, h * 0.4f)
+                lineTo(w * 0.95f, h * 0.4f)
+                lineTo(w * 0.95f, h * 0.85f)
+                lineTo(w * 0.05f, h * 0.85f)
+                close()
+            } else {
+                // Closed folder state
+                moveTo(w * 0.05f, h * 0.25f)
+                lineTo(w * 0.4f, h * 0.25f)
+                lineTo(w * 0.5f, h * 0.4f)
+                lineTo(w * 0.95f, h * 0.4f)
+                lineTo(w * 0.95f, h * 0.8f)
+                lineTo(w * 0.05f, h * 0.8f)
+                close()
+            }
+        }
+        drawPath(path = path, color = tint)
+    }
+}
+
+@Composable
+fun FileIcon(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(w * 0.15f, h * 0.1f)
+            lineTo(w * 0.65f, h * 0.1f)
+            lineTo(w * 0.85f, h * 0.3f)
+            lineTo(w * 0.85f, h * 0.9f)
+            lineTo(w * 0.15f, h * 0.9f)
+            close()
+        }
+        drawPath(path = path, color = tint)
+        
+        // Corner fold paint
+        val foldPath = androidx.compose.ui.graphics.Path().apply {
+            moveTo(w * 0.65f, h * 0.1f)
+            lineTo(w * 0.65f, h * 0.3f)
+            lineTo(w * 0.85f, h * 0.3f)
+            close()
+        }
+        drawPath(path = foldPath, color = Color.Black.copy(alpha = 0.35f))
+    }
+}
+
+@Composable
+fun CopyIcon(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        // Back overlapping box sheet
+        drawRect(
+            color = tint.copy(alpha = 0.4f),
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.1f, h * 0.1f),
+            size = androidx.compose.ui.geometry.Size(w * 0.55f, h * 0.55f),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
+        )
+        // Front box sheet
+        drawRect(
+            color = tint,
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.35f, h * 0.35f),
+            size = androidx.compose.ui.geometry.Size(w * 0.55f, h * 0.55f)
+        )
+    }
 }
 
 

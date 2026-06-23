@@ -201,6 +201,134 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _viewState.value = ViewState.MAIN
     }
 
+    // Active browsing session state
+    private val _activeTreeRoot = MutableStateFlow<TreeNode?>(null)
+    val activeTreeRoot: StateFlow<TreeNode?> = _activeTreeRoot.asStateFlow()
+
+    private val _currentOpenedFileContent = MutableStateFlow<String?>(null)
+    val currentOpenedFileContent: StateFlow<String?> = _currentOpenedFileContent.asStateFlow()
+
+    private val _currentOpenedFileName = MutableStateFlow<String?>(null)
+    val currentOpenedFileName: StateFlow<String?> = _currentOpenedFileName.asStateFlow()
+
+    private val _currentOpenedFilePath = MutableStateFlow<String?>(null)
+    val currentOpenedFilePath: StateFlow<String?> = _currentOpenedFilePath.asStateFlow()
+
+    private val _activeBrowsingRecord = MutableStateFlow<HistoryEntity?>(null)
+    val activeBrowsingRecord: StateFlow<HistoryEntity?> = _activeBrowsingRecord.asStateFlow()
+
+    private val _treeSearchQuery = MutableStateFlow("")
+    val treeSearchQuery: StateFlow<String> = _treeSearchQuery.asStateFlow()
+
+    fun updateTreeSearchQuery(query: String) {
+        _treeSearchQuery.value = query
+    }
+
+    /**
+     * Initializes file viewer tree from decompilation output path.
+     */
+    fun openDecompiledSourceViewer(record: HistoryEntity) {
+        _activeBrowsingRecord.value = record
+        _currentOpenedFileContent.value = null
+        _currentOpenedFileName.value = null
+        _currentOpenedFilePath.value = null
+        _treeSearchQuery.value = ""
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = java.io.File(record.outputPath)
+            if (!file.exists()) {
+                Log.e("MainViewModel", "File does not exist: ${record.outputPath}")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "Extraction ZIP not found or deleted.", Toast.LENGTH_LONG).show()
+                }
+                return@launch
+            }
+
+            val root = TreeNode(name = record.fileName, path = "", isDirectory = true, isExpanded = true)
+            try {
+                java.util.zip.ZipFile(file).use { zip ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        val entryName = entry.name
+                        if (entryName.startsWith("__MACOSX") || entryName.contains(".DS_Store")) {
+                            continue
+                        }
+                        addPathToTree(root, entryName)
+                    }
+                }
+                root.sortChildrenRecursively()
+                _activeTreeRoot.value = root
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error parsing entries to build folder view tree", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "Failed to read extracted project structure: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun addPathToTree(root: TreeNode, entryPath: String) {
+        val parts = entryPath.split("/").filter { it.isNotEmpty() }
+        var current = root
+        var currentPath = ""
+        for (i in parts.indices) {
+            val part = parts[i]
+            currentPath = if (currentPath.isEmpty()) part else "$currentPath/$part"
+            val isLast = (i == parts.lastIndex)
+            val isDir = !isLast || entryPath.endsWith("/")
+            
+            var child = current.children.find { it.name == part && it.isDirectory == isDir }
+            if (child == null) {
+                child = TreeNode(name = part, path = currentPath, isDirectory = isDir)
+                current.children.add(child)
+            }
+            current = child
+        }
+    }
+
+    /**
+     * Loads raw file contents asynchronously from the history ZIP archive.
+     */
+    fun loadFileContentFromActiveZip(filePath: String) {
+        val record = _activeBrowsingRecord.value ?: return
+        _currentOpenedFilePath.value = filePath
+        _currentOpenedFileName.value = filePath.substringAfterLast("/")
+        _currentOpenedFileContent.value = "Loading source file contents..."
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = java.io.File(record.outputPath)
+            if (!file.exists()) {
+                _currentOpenedFileContent.value = "Error: output package ZIP file has been deleted or moved."
+                return@launch
+            }
+
+            try {
+                java.util.zip.ZipFile(file).use { zip ->
+                    val entry = zip.getEntry(filePath)
+                    if (entry == null) {
+                        _currentOpenedFileContent.value = "Error: File \"$filePath\" was not found in the extraction package."
+                        return@launch
+                    }
+                    val stream = zip.getInputStream(entry)
+                    val content = stream.bufferedReader(Charsets.UTF_8).readText()
+                    _currentOpenedFileContent.value = content
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error loading file content: $filePath", e)
+                _currentOpenedFileContent.value = "Error reading source: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    fun closeDecompiledSourceViewer() {
+        _activeBrowsingRecord.value = null
+        _activeTreeRoot.value = null
+        _currentOpenedFileContent.value = null
+        _currentOpenedFileName.value = null
+        _currentOpenedFilePath.value = null
+    }
+
     data class FileValidation(val isValid: Boolean, val errorMessage: String?)
 
     private fun validateFile(context: Context, uri: Uri, customFileName: String? = null): FileValidation {
