@@ -1,0 +1,8 @@
+{
+  "name": "Remix: NOVA EXTRACTOR ",
+  "description": "Off-line APK \u0026 IPA source code extractor with beautiful high-contrast dark theme. For iOS or Android ",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
