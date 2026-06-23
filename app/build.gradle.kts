@@ -44,6 +44,7 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
   compileOptions {
@@ -118,3 +119,19 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }
+
+tasks.register<Copy>("copyApks") {
+    from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+    into(file("${rootDir}/APK_DOWNLOAD"))
+    rename { "app-debug.apk" }
+    
+    doLast {
+        copy {
+            from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+            into(file("${rootDir}/.build-outputs"))
+            rename { "app-debug.apk" }
+        }
+        println("Successfully copied APK to APK_DOWNLOAD/app-debug.apk and .build-outputs/app-debug.apk")
+    }
+}
+
